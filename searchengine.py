@@ -2,7 +2,7 @@
 This project aims to build a basic search engine including different fundamental components we
 talked about them for building up Indexing and Query Processing pipelines. The search engine starts from
 command line using “python searchengine.py”. Then, the script shows following options, and the user
-selects an option for doing related task.
+selects an option for doing related task. 
 
 1- Collect new documents.
 2- Index documents.

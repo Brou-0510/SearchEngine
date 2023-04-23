@@ -26,3 +26,9 @@ Predict a link
 Tell your story!
 Exit
 
+# Getting Started
+
+## Prerequisites
+
+Python 3
+Libraries:

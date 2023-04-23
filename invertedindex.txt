@@ -1,0 +1,2 @@
+| Term | Soundex | Appearances (DocHash, Frequency) |
+|------|---------|----------------------------------|

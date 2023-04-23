@@ -1,0 +1,12 @@
+A search engine system is a software tool designed to help users find information on the internet.
+There are various search engine systems available that cater to different purposes.
+An example of a specific purpose of a search engine system is to provide news search assistance.
+These types of search engines are tailored to help find up-to-date, accurate, and relevant news articles quickly and easily.
+They would allow users to search for specifc news topics by location, title, keywords, and other relevant criteria.
+
+One of the key features of a news search engine system is its ability to use advanced algorithms and machine learning techniques to group and rank news articles based on their relevance and reliability. 
+Allowing users to quickly and easily find the most credible and informative news articles on a particular topic, without having to sift through irrelevant or biased content. 
+Additionally, many news search engine systems offer personalized recommendations and alerts based on users' search histories and preferences, helping users stay informed about the latest developments in their areas of interest.
+
+In our search engine we have incorporated some of these features using our knowledge from the course to build the various components of our system.
+For Example,

@@ -2,7 +2,7 @@
 This project aims to build a basic search engine including different fundamental components we
 talked about them for building up Indexing and Query Processing pipelines. The search engine starts from
 command line using “python searchengine.py”. Then, the script shows following options, and the user
-selects an option for doing related task. 
+selects an option for doing related task.
 
 1- Collect new documents.
 2- Index documents.
@@ -18,16 +18,35 @@ selects an option for doing related task.
 #Imports
 import sys
 import os
+import re
 import time
 import pandas as pd
 import numpy as np
 import nltk
+import string
+import json
+import joblib
 nltk.download('stopwords')
 from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from nltk.tokenize import word_tokenize
 import hashlib
 import msvcrt
 import datetime
 import requests
+import warnings
+from joblib import dump
+import sklearn
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
+
+
 #pip install bs4
 from bs4 import BeautifulSoup
 #pip install justext
@@ -39,6 +58,7 @@ from trafilatura import extract
 TOPICS = ['Technology', 'Health', 'Entertainment']
 STORYFILENAME = "story.txt"
 INVERTEDINDEXFILENAME = "invertedindex.txt"
+MAPFILENAME = "mapping.txt"
 
 #Global Variables
 optionSelected = 1
@@ -51,6 +71,8 @@ def UserOption():
     # If option is non numeric or less than 1 or greater than 7 
     if optionSelected.isnumeric() == False or int(optionSelected) < 1 or int(optionSelected) > 7:
         print("Error in option entered, ensure that the format follows:\npython searchengine.py \'1-7\'\n\nOptions:\n1- Collect new documents.\n2- Index documents.\n3- Search for a query.\n4- Train ML classifier.\n5- Predict a link.\n6- Your story!\n7- Exit")
+        print("\nPress any key to return to options menu...")
+        msvcrt.getch()
 
     # Else valid input is entered
     else:
@@ -59,7 +81,7 @@ def UserOption():
 
 # Collect documents from source links file
 def collect_documents():
-    print("Collecting Documents...\nIf being run for the first time expect collection time of 1 Hour.")
+    print("Collecting Documents...\nIf being run for the first time expect collection time of 10 minutes.")
     global TOPICS
 
     # Create data directory if it doesn't exist
@@ -71,10 +93,14 @@ def collect_documents():
         if not os.path.exists("data/" + topic):
             os.mkdir("data/" + topic)
 
+    # Create mapping txt file
+    mapFile = open(MAPFILENAME, "w", encoding = "UTF-8")
+    mapFile.close()
+
     max_depth = 1
     
     # Read from sources.txt
-    with open('sources.txt', 'r') as f:
+    with open('sources.txt', 'r', encoding = "UTF-8") as f:
         for line in f:
             
             # Split line into topic and link
@@ -94,14 +120,35 @@ def collect_documents():
             except requests.exceptions.RequestException:
                 pass
 
+    warnings.filterwarnings("default")
+
+    # Populate hashid to docID dictonary
+    docIDsDict = {}
+    with open("crawl.log", "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        count = 1
+        for line in lines:
+            lineAttributes = line.split(", ")
+            docIDsDict[str(lineAttributes[2] + ".txt")] = "H" + str(count)
+            count += 1
+
+    # Dump dictonary into map file
+    with open(MAPFILENAME, "w", encoding="utf-8") as f:
+        json.dump(docIDsDict, f)
+
 # Crawl through the link, collect contents, and save contents to hashed url file
 def crawl_link(link, topic, max_depth, url_hash):
+    warnings.filterwarnings("ignore")
     response = requests.get(link)
     response.raise_for_status()
+
+    translator = str.maketrans('', '', string.punctuation)
+
     soup = BeautifulSoup(response.content, 'html.parser')
+    text = soup.get_text()
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text.translate(translator) 
     
-    # Extract content
-    text = extract(response.content)
     
     # Remove stopwords from content
     stop_words = set(stopwords.words('english'))
@@ -111,9 +158,8 @@ def crawl_link(link, topic, max_depth, url_hash):
     with open(f'data/{topic}/{url_hash}.txt', 'w', encoding='utf-8') as f:
         f.write(text)
     
-    
     # Write to crawl.log file
-    with open('crawl.log', 'a') as f:
+    with open('crawl.log', 'a', encoding='utf-8') as f:
         f.write(f'{topic}, {link}, {url_hash}, {datetime.datetime.now()}\n')
     
     # Crawl links on page up to a maximum depth
@@ -137,8 +183,11 @@ def crawl_link(link, topic, max_depth, url_hash):
                         response = requests.get(href)
                         response.raise_for_status()
                         
-                        # Extract content
-                        text = extract(response.content)
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        text = soup.get_text()
+                        text = re.sub(r'\s+', ' ', text).strip()
+                        text = text.translate(translator) 
+                        
                         
                         if text is not None:
 
@@ -162,26 +211,164 @@ def crawl_link(link, topic, max_depth, url_hash):
                     except:
                         pass
 
+# Calculate soundex
+def soundex(word):
+    # remove all non-alphabetic characters and convert to uppercase
+    word = re.sub(r'[^A-Za-z]+', '', word.upper())
+    
+    # handle empty string or strings with only one character
+    if not word or len(word) == 1:
+        return word
+    
+    # map the first character to itself and the rest to their corresponding digits
+    soundex_code = word[0]
+    digit_map = str.maketrans('BFPVCGJKQSXZDTLMNR', '111122222222334556')
+    soundex_code += word[1:].translate(digit_map)
+    
+    # remove consecutive duplicates and all zeros except the first one
+    soundex_code = re.sub(r'(\d)\1+', r'\1', soundex_code)
+    soundex_code = re.sub(r'0', '', soundex_code)
+    
+    # pad the code with zeros or truncate it to length 4
+    soundex_code = soundex_code + '000'
+    return soundex_code[:4]
+
 # Create inverted index using downloaded page and save it as invertedindex.txt
 def index_documents():
-    file = open(INVERTEDINDEXFILENAME, "w", encoding="utf-8")
-    file.write("| Term | Soundex | Appearances (DocHash, Frequency) |\n|------|---------|----------------------------------|")
     
+    # initialize the inverted index dictionary
+    inverted_index = {}
+
+    # Initalize docID dictonary
+    with open(MAPFILENAME, "r", encoding="utf-8") as f:
+        docIDDict = json.load(f)
+
+    # loop through each file in the "data" folder
+    for topic in TOPICS:
+        for filename in os.listdir("data/" + str(topic)):
+            with open(os.path.join("data/" + str(topic), filename), "r", encoding = "UTF-8") as f:
+                text = f.read()
+                
+                # Turn text to lower case
+                text = text.lower()
+                
+                # Tokenize text
+                tokenizedText = word_tokenize(text)
+                
+                # Remove stopwords
+                stop_words = set(stopwords.words('english'))
+                tokenizedText = [word for word in tokenizedText if word not in stop_words]
+                
+                # Stem text
+                stemmer = PorterStemmer()
+                tokenizedText = [stemmer.stem(word) for word in tokenizedText]
+                
+
+                # loop through each term in the text
+                for term in set(tokenizedText):
+                    
+                    # add the term to the inverted index dictionary
+                    if term not in inverted_index:
+                        inverted_index[term] = []
+                    
+                    # update the corresponding document identifier and frequency
+                    inverted_index[term].append((docIDDict[filename], tokenizedText.count(term)))
+
+    # write the inverted index to a file
+    with open("invertedindex.txt", "w", encoding = "UTF-8") as f:
+        f.write("| Term | Soundex | Appearances (DocID, Frequency) |\n")
+        f.write("|------|---------|--------------------------------|\n")
+        for term in sorted(inverted_index.keys()):
+            
+            # we can use Soundex algorithm to calculate the Soundex code for each term
+            soundexCode = soundex(term)
+            
+            # we can use a mapping file to store the mapping between document identifier and DocID
+            appearances = " ".join("({}, {}) |".format(docid, freq) for (docid, freq) in inverted_index[term])
+            f.write("| {:<10} | {:<6} | {:<35} \n".format(term, soundexCode, appearances))
 
 def search_query():
     print("Searching for a query...")
     # code to search for a query goes here
 
 def train_classifier():
-    print("Training ML classifier...")
-    # code to train ML classifier goes here
+    print("Training classifier...")
+    # X holds the text contents, Y holds the topic the text is associated with
+    X = []
+    Y = []
+    
+    # loop through each file in the "data" folder
+    for topic in TOPICS:
+        for filename in os.listdir("data/" + str(topic)):
+            with open(os.path.join("data/" + str(topic), filename), "r", encoding = "UTF-8") as f:
+                text = f.read()
+            X.append(text)
+            Y.append(topic)
+
+
+
+    # Vectorize and remove stop words from the docs
+    vectorizer = TfidfVectorizer(stop_words='english')
+    X = vectorizer.fit_transform(X)
+
+    # Split the data into training and testing sets
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+    # Train and fit the classifier
+    clf = SVC(probability=True) # 1
+    #clf = MultinomialNB() # 2
+    #clf = KNeighborsClassifier() # 5
+    #clf = RandomForestClassifier() # 3
+    #clf = DecisionTreeClassifier() # 4
+    clf.fit(X_train, Y_train)
+
+    # Save the classifier as classifier.model and vectorizer
+    joblib.dump(clf, "classifier.model")
+    joblib.dump(vectorizer, "vectorizer.joblib")
+
+    # Print the training results
+    Y_pred = clf.predict(X_test)
+    
+    accuracy = accuracy_score(Y_test, Y_pred)
+    recall = recall_score(Y_test, Y_pred, average="macro")
+    precision = precision_score(Y_test, Y_pred, average="macro")
+    f1 = f1_score(Y_test, Y_pred, average="macro")
+    matrix = confusion_matrix(Y_test, Y_pred)
+    print("Performance of SV Classification:\nAccuracy: {:.3f}\nRecall: {:.3f}\nPrecision: {:.3f}\nF1-score: {:.3f}\nConfusion Matrix:\n{}".format(accuracy, recall, precision, f1, matrix))
 
 def predict_link():
-    print("Predicting a link...")
-    # code to predict a link goes here
+    predictLink = input("Enter the link you would like to predict it's topic (Options - Technology, Health, Entertainment): ")
+    try:
+        response = requests.get(predictLink)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        text = soup.get_text()
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Load the saved classifier
+        with open("classifier.model", 'rb') as file:
+            clf = joblib.load(file)
+        
+        # Load the saved vectorizer
+        with open("vectorizer.joblib", 'rb') as file:
+            vectorizer = joblib.load(file)
+
+        # Apply vectorizer used in model to inputted text
+        input_vector = vectorizer.transform([text])
+
+        # Predict the label for the input text
+        label_Pred = clf.predict(input_vector)
+        confidence_Level = clf.predict_proba(input_vector)
+
+        # Print predicted label
+        print(f"\n<{label_Pred}, {confidence_Level[0]}>")
+
+    except:
+        print("\nError in link entered...")
+
 
 def user_story():
-
     # Clear screen
     os.system('clear')
     # Save page content in topic related subfolder
@@ -211,36 +398,42 @@ def run():
             if optionSelected == 1:
                 collect_documents()
                 print("\nCollection complete.\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Index documents selected
             elif optionSelected == 2:
                 index_documents()
                 print("\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Search for a query selected
             elif optionSelected == 3:
                 search_query()
                 print("\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Train ML classifer selected
             elif optionSelected == 4:
                 train_classifier()
                 print("\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Predict a link selected
             elif optionSelected == 5:
                 predict_link()
                 print("\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Story option selected
             elif optionSelected == 6:
                 user_story()
                 print("\nPress any key to return to options menu...")
+                time.sleep(1)
                 msvcrt.getch()
 
             # Exit option selected

@@ -45,14 +45,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
-
+from sklearn.metrics.pairwise import cosine_similarity
 
 #pip install bs4
 from bs4 import BeautifulSoup
-#pip install justext
-from justext import justext
-#pip install trafilatura
-from trafilatura import extract
 
 #Constants
 TOPICS = ['Technology', 'Health', 'Entertainment']
@@ -217,9 +213,13 @@ def soundex(word):
     word = re.sub(r'[^A-Za-z]+', '', word.upper())
     
     # handle empty string or strings with only one character
-    if not word or len(word) == 1:
+    if not word:
         return word
     
+    # remove select characters
+    removeCode = str.maketrans('', '', 'AEIOUYHW')
+    wordCode = word[1:].translate(removeCode)
+
     # map the first character to itself and the rest to their corresponding digits
     soundex_code = word[0]
     digit_map = str.maketrans('BFPVCGJKQSXZDTLMNR', '111122222222334556')
@@ -235,6 +235,7 @@ def soundex(word):
 
 # Create inverted index using downloaded page and save it as invertedindex.txt
 def index_documents():
+    print("Indexing Documents...\nExpect indexing time of 5 minutes.")
     
     # initialize the inverted index dictionary
     inverted_index = {}
@@ -279,18 +280,186 @@ def index_documents():
         f.write("| Term | Soundex | Appearances (DocID, Frequency) |\n")
         f.write("|------|---------|--------------------------------|\n")
         for term in sorted(inverted_index.keys()):
+            # Check if word contains a number surrounded by letters at all (considered as not real string)
+            pattern = re.compile(r'\b\w*[a-zA-Z]+\d+\w*[a-zA-Z]+\w*\b')
+            matchingWord = pattern.findall(term)
+            if (len(matchingWord) == 0):
+                # we can use Soundex algorithm to calculate the Soundex code for each term
+                soundexCode = soundex(term)
             
-            # we can use Soundex algorithm to calculate the Soundex code for each term
-            soundexCode = soundex(term)
-            
-            # we can use a mapping file to store the mapping between document identifier and DocID
-            appearances = " ".join("({}, {}) |".format(docid, freq) for (docid, freq) in inverted_index[term])
-            f.write("| {:<10} | {:<6} | {:<35} \n".format(term, soundexCode, appearances))
+                # we can use a mapping file to store the mapping between document identifier and DocID
+                appearances = "".join("({}, {})|".format(docid, freq) for (docid, freq) in inverted_index[term])
+                f.write("|{}|{}|{}\n".format(term, soundexCode, appearances))
 
+# Search for the 3 most related documents based on the query
 def search_query():
-    print("Searching for a query...")
-    # code to search for a query goes here
+    
+    query = input("Enter query: ")
 
+
+    # If option is non numeric or less than 1 or greater than 7 
+    if query.replace(' ', '').isalnum() == True:
+        words = {}
+        sound = {}
+        
+        # Set up dictonary with terms as keys and docID and frequency as values
+        with open("invertedindex.txt", "r", encoding = "UTF-8") as f:
+            lines = f.readlines()[2:]
+            for line in lines:
+                line = line.strip()
+                line = line.split('|')
+                words[line[1]] = line[3:-1]
+
+                # Add soundex as key and the term as value
+                if line[2] not in sound:
+                    sound[line[2]] = [line[1]]
+
+                # Soundex already added, add new term with same soundex
+                else:
+                    sound[line[2]].append(line[1])
+        
+        
+
+        # Turn text to lower case
+        query = [query.lower()]
+        
+        
+        frequencyTotal = {}
+        
+        print("Searching for a query...")
+        
+        # finds every document where word occurs at least once
+        for word in query:
+            
+            # If word is not in index add soundex
+            if word not in words:
+                soundexCode = soundex(word)
+                
+                # Check if soundex already exists
+                if soundexCode in sound:
+                    # Retrieve terms with soundex
+                    soundexTerms = sound[soundexCode]
+
+                    maxTerm = ""
+                    maxDocs = 0
+                            
+
+                    # Search for number of documents with term
+                    for term in soundexTerms:
+                        if term in words:
+                            
+                            # Retrieve documents and total frequency
+                            termInfo = words[term]
+                            
+                            if len(termInfo) > maxDocs:
+                                maxDocs = len(termInfo)
+                                maxTerm = term
+                    
+                    # Add best word replace to frequencytotal
+                    if maxTerm in words:
+                        # Retrieve documents and total frequency
+                        termInfo = words[maxTerm]
+                        
+                        # Add frequency to respective docID in dictonary
+                        for values in termInfo:
+                            docID, Freq = values.split(", ")
+                            docID = docID[1:]
+                            Freq = Freq[:-1]
+                            if docID in frequencyTotal:
+                                frequencyTotal[docID] += int(Freq)
+                            
+                            else:
+                                frequencyTotal[docID] = int(Freq)
+
+            # Word is in index
+            elif word in words:
+                
+                # Retrieve documents and total frequency
+                termInfo = words[word]
+
+                # Add frequency to respective docID in dictonary
+                for values in termInfo:
+                    docID, Freq = values.split(", ")
+                    docID = docID[1:]
+                    Freq = Freq[:-1]
+                    if docID in frequencyTotal:
+                        frequencyTotal[docID] += int(Freq)
+                    
+                    else:
+                        frequencyTotal[docID] = int(Freq)
+        
+        
+        # Load mapping
+        with open("mapping.txt", "r", encoding = "UTF-8") as f:
+            mapDict = json.load(f)
+
+        docHashFiles = []
+
+        # Retrieve corresponding hashed file names for docIDs
+        for hashFiles in frequencyTotal.keys():
+            
+            # Retrieve keys with corresponding docID value
+            keyFile = [k for k, v in mapDict.items() if v == hashFiles]
+            docHashFiles.append(keyFile[0])
+    
+        
+    
+        similarities = {}
+
+        # Retrieve contents of selected files, vectorize and compare
+        for file in docHashFiles:
+            # Check each topic
+            for topic in TOPICS:
+
+                fileExistance = os.path.isfile(f'data/{topic}/{file}')
+                
+                # Check if file exist in folder
+                if (fileExistance == True):
+                    
+                    # Open file, read contents, tokenize, remove stopwords, vectorize, and compare
+                    with open(f'data/{topic}/{file}', "r", encoding="utf-8") as f:
+                        text = f.read()
+
+                        # X holds the text contents, Y holds the topic the text is associated with
+                        X = []
+                        Y = []
+                        X.append(text)
+                        Y.append(topic)
+
+                        # Vectorize and remove stop words from the docs and query 
+                        vectorizer = TfidfVectorizer(stop_words='english')
+                        docVector = vectorizer.fit_transform(X).toarray()
+                        queryVector = vectorizer.transform(query).toarray()
+
+                        # Calculate cosine similarity
+                        cos_sim = cosine_similarity(docVector, queryVector)
+                        similarities[file] = cos_sim
+
+
+        # Check similarities for top 3 scores
+        topKeys = sorted(similarities, key=similarities.get, reverse=True)[:3]    
+
+
+        print("Top 3 most related documents:\n")
+
+        # Grab urls for hash in crawl.log
+        for key in topKeys:
+            hashFile = key[:-4]
+
+            with open("crawl.log", "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                
+                # Search for correct line that contains the actual url of the document
+                for line in lines:
+                    if hashFile in line:
+                        crawlInfo = line.split(", ")
+                        print(crawlInfo[1] + " : " + str(similarities[key]))
+
+    # If invalid query is sent
+    else:
+        print("Error in input for query.\nReturning to main menu...\n")
+
+# Use SVC model to train using the document and topic data, then display various performance metrics
 def train_classifier():
     print("Training classifier...")
     # X holds the text contents, Y holds the topic the text is associated with
@@ -336,6 +505,7 @@ def train_classifier():
     matrix = confusion_matrix(Y_test, Y_pred)
     print("Performance of SV Classification:\nAccuracy: {:.3f}\nRecall: {:.3f}\nPrecision: {:.3f}\nF1-score: {:.3f}\nConfusion Matrix:\n{}".format(accuracy, recall, precision, f1, matrix))
 
+# Use saved model and classifier to predict topic of user inputted link
 def predict_link():
     predictLink = input("Enter the link you would like to predict it's topic (Options - Technology, Health, Entertainment): ")
     try:
@@ -360,14 +530,19 @@ def predict_link():
         # Predict the label for the input text
         label_Pred = clf.predict(input_vector)
         confidence_Level = clf.predict_proba(input_vector)
+        typeIndex = 0
+        if (label_Pred == "Technology"):
+            typeIndex = 2
+        elif (label_Pred == "Health"):
+            typeIndex = 1
 
         # Print predicted label
-        print(f"\n<{label_Pred}, {confidence_Level[0]}>")
+        print(f"\n<{label_Pred[0]}, {confidence_Level[0][typeIndex]:.3f}>")
 
     except:
         print("\nError in link entered...")
 
-
+# Read story file and print to screen
 def user_story():
     # Clear screen
     os.system('clear')
